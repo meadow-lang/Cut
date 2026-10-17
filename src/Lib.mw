@@ -22,10 +22,22 @@ use Std.Char as C
   File + File { entry : String, answer : String, decls : [Decl] }
   DataCtor + DataCtor { name : String, fields : [String] }
   Decl + Data { symbol : String, params : [String], ctors : [DataCtor] }
-  Op + Op { name : String, params : [String], result : String }
+  Decl + Roles { roles : [String], ctors : [String] }
+  Decl + Native { ops : [String], runtime : [String] }
+  Op + Op { name : String, params : [String], result : String, many : Bool }
   Decl + Effect { symbol : String, ops : [Op] }
   Decl + Val { symbol : String, rep : String, body : Stmt }
-  Decl + Def { symbol : String, reps : [String], params : [Param], conts : [Param], body : Stmt }
+  Decl
+    + Def {
+      symbol : String,
+      reps : [String],
+      descs : [String],
+      effects : [String],
+      kinds : [String],
+      params : [Param],
+      conts : [Param],
+      body : Stmt
+    }
   Param + Param { name : String, rep : String }
   Prod + Var { name : String }
   Prod + Sym { symbol : String }
@@ -97,7 +109,24 @@ use Std.Char as C
 @pub fun effectDecl out (m : Meta) (symbol : String) ops = newCutDeclEffect out m symbol ops
 
 @pub fun opDecl out (m : Meta) (name : String) (params : [String]) (result : String) =
-  newCutOp out m name params result
+  newCutOp out m name params result False
+
+-- `@many name(params) -> result`: an operation a clause may resume more
+-- than once, which makes its effect a `ManyEffect`.
+@pub fun manyOpDecl out (m : Meta) (name : String) (params : [String]) (result : String) =
+  newCutOp out m name params result True
+
+-- `roles { role = symbol ... }`: which declared constructor plays each part
+-- the runtime builds or recognises -- `nil`, `cons`, `some`, `ok`, ... -- as
+-- (role, constructor) pairs.
+@pub fun rolesDecl out (m : Meta) (roles : [(String, String)]) =
+  newCutDeclRoles out m (V.map fst roles) (V.map snd roles)
+
+-- `native { op = Effect.op ... }`: the runtime operation that performs each
+-- operation the program leaves unhandled, as (operation, runtime operation)
+-- pairs.
+@pub fun nativeDecl out (m : Meta) (ops : [(String, String)]) =
+  newCutDeclNative out m (V.map fst ops) (V.map snd ops)
 
 -- `val symbol : rep = s`: computed once, what `s` gives to `halt`.
 @pub fun valDecl out (m : Meta) (symbol : String) (rep : String) body =
@@ -105,7 +134,33 @@ use Std.Char as C
 
 -- `def symbol (params; conts) = s`.
 @pub fun defDecl out (m : Meta) (symbol : String) params conts body =
-  newCutDeclDef out m symbol [] params conts body
+  newCutDeclDef out m symbol [] [] [] [] params conts body
+
+-- `def symbol <'a = da, ...; e: Effect, ...> (params; conts) = s`: a
+-- definition generic in how values are represented and in effects. `reps`
+-- are (variable, descriptor parameter) pairs, whose parameters are among
+-- `params` where the definition wants them; `effects` (variable, kind)
+-- pairs, the kind `Effect` or `ManyEffect`.
+@pub fun defWith
+    out
+    (m : Meta)
+    (symbol : String)
+    (reps : [(String, String)])
+    (effects : [(String, String)])
+    params
+    conts
+    body =
+  newCutDeclDef
+    out
+    m
+    symbol
+    (V.map fst reps)
+    (V.map snd reps)
+    (V.map fst effects)
+    (V.map snd effects)
+    params
+    conts
+    body
 
 -- `def symbol <'a = da, ...> (da: desc, ..., params; conts) = s`: a
 -- definition generic in how values are represented, a descriptor to each of
@@ -116,6 +171,9 @@ use Std.Char as C
     m
     symbol
     reps
+    (V.map (\r -> "d${r}") reps)
+    []
+    []
     (V.append (V.map (\r -> newCutParam out m "d${r}" "desc") reps) params)
     conts
     body
@@ -309,15 +367,31 @@ fun decl w (a : CutArena) (d : CutDecl) =
            else "${cutDataCtorName a c}(${S.join ", " fs})")
       in put w "data ${r.symbol}${taking} { ${S.join "; " (V.map ctor r.ctors)} }\n"
   | CutDeclView.Effect r ->
-      let op = \o -> "${cutOpName a o}(${S.join ", " (cutOpParams a o)}) -> ${cutOpResult a o}" in
-      put w "effect ${r.symbol} { ${S.join "; " (V.map op r.ops)} }\n"
+      let op =
+        \o ->
+          (let many = if cutOpMany a o then "@many " else "" in
+           "${many}${cutOpName a o}(${S.join ", " (cutOpParams a o)}) -> ${cutOpResult a o}")
+      in put w "effect ${r.symbol} { ${S.join "; " (V.map op r.ops)} }\n"
+  | CutDeclView.Roles r -> table w "roles" r.roles r.ctors
+  | CutDeclView.Native r -> table w "native" r.ops r.runtime
   | CutDeclView.Def r ->
-      (let reps =
-         if V.isEmpty r.reps then "" else "<${S.join ", " (V.map (\x -> "'${x} = d${x}") r.reps)}> "
+      (let reps = V.map (\x -> "'${fst x} = ${snd x}") (V.zip r.reps r.descs) in
+       let effects = V.map (\x -> "${fst x}: ${snd x}") (V.zip r.effects r.kinds) in
+       let reps =
+         if V.isEmpty reps and V.isEmpty effects then ""
+         else if V.isEmpty effects then "<${S.join ", " reps}> "
+         else if V.isEmpty reps then "<${S.join ", " effects}> "
+         else "<${S.join ", " reps}; ${S.join ", " effects}> "
        in
        let u = put w "def ${r.symbol} ${reps}${params a r.params r.conts} =\n  " in
        let v = stmt w a 1 r.body in
        put w "\n")
+
+-- `roles { ... }` or `native { ... }`: a binding to a line.
+fun table w (word : String) (keys : [String]) (values : [String]) =
+  let u = put w "${word} {\n" in
+  let v = V.foldl (\x kv -> put w "  ${fst kv} = ${snd kv}\n") () (V.zip keys values) in
+  put w "}\n"
 
 fun paramText (a : CutArena) (p : CutParam) : String = "${cutParamName a p}: ${cutParamRep a p}"
 
@@ -500,4 +574,65 @@ use Std.Test (assertEq)
   in assertEq
        written
        "cut 0\nentry test:Main/main\nanswer str\n\ndef test:Main/main (; k: ptr) =\n  <\"hi\" | k>\n"
+       "the program's text"
+
+-- What a front end with generics, `@many` operations, roles and natives
+-- writes, in the order `meadow_cut::parse` takes declarations.
+@test fun everyDeclarationIsWrittenAsMeadowCutReadsIt () =
+  let written =
+    runSt (\() ->
+      let out = builder () in
+      let m = nowhere in
+      let list =
+        dataDecl out m "test:Main/List" ["'a"] [
+          ctorDecl out m "Nil" [],
+          ctorDecl out m "Cons" ["'a", "ptr"]
+        ]
+      in
+      let roles =
+        rolesDecl out m [("nil", "test:Main/List.Nil"), ("cons", "test:Main/List.Cons")]
+      in
+      let native = nativeDecl out m [("test:Main/Out.say", "Console.writeOutput")] in
+      let choose =
+        effectDecl out m "test:Main/Choose" [
+          manyOpDecl out m "choose" ["unit"] "bool",
+          opDecl out m "flip" ["i64"] "unit"
+        ]
+      in
+      let ident =
+        defWith
+          out
+          m
+          "test:Main/id"
+          [("a_5", "d_a_4")]
+          [("e_3", "Effect"), ("f_9", "ManyEffect")]
+          [param out m "d_a_4" "desc", param out m "x" "'a_5"]
+          [param out m "k" "ptr"]
+          (give out m (var out m "x") (cont out m "k"))
+      in
+      let pure =
+        defWith
+          out
+          m
+          "test:Main/all"
+          []
+          [("e", "ManyEffect")]
+          []
+          [param out m "k" "ptr"]
+          (give out m (unit out m) (cont out m "k"))
+      in text
+           (finished
+              out
+              (file out m "test:Main/all" "none" [list, roles, native, choose, ident, pure])))
+  in assertEq
+       written
+       (S.join "\n" [
+          "cut 0", "entry test:Main/all", "answer none", "",
+          "data test:Main/List <'a> { Nil; Cons('a, ptr) }", "", "roles {",
+          "  nil = test:Main/List.Nil", "  cons = test:Main/List.Cons", "}", "", "native {",
+          "  test:Main/Out.say = Console.writeOutput", "}", "",
+          "effect test:Main/Choose { @many choose(unit) -> bool; flip(i64) -> unit }", "",
+          "def test:Main/id <'a_5 = d_a_4; e_3: Effect, f_9: ManyEffect> (d_a_4: desc, x: 'a_5; k: ptr) =",
+          "  <x | k>", "", "def test:Main/all <e: ManyEffect> (; k: ptr) =", "  <unit | k>", ""
+        ])
        "the program's text"
