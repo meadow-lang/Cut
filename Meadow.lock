@@ -26,16 +26,16 @@ tree = "809c6aa34620f8b8270c7811bb4b54e56719cbfe"
 
 [[package]]
 name = "LineEditor"
-source = "git+https://github.com/meadow-lang/LineEditor?version=0.2.0"
+source = "git+https://github.com/meadow-lang/LineEditor?version=0.2.2"
 version = "0.2.2"
 rev = "2c4b99ff3d5af18cd5cb65d33c8f61a53f7edd99"
 tree = "94081a99b15d97885e9752fca248decf47b8c951"
 
 [[package]]
 name = "Lingua"
-source = "git+https://github.com/meadow-lang/Lingua.git?rev=67ed9c31cd3044f36e062e15fbbdc1daf4ad7ec6"
-rev = "67ed9c31cd3044f36e062e15fbbdc1daf4ad7ec6"
-tree = "79da1493fd78bca6a83ea73235c2fb35e97dd843"
+source = "git+https://github.com/meadow-lang/Lingua.git?rev=e15e7f9072d67e7e31c028c68fb664b95c94c283"
+rev = "e15e7f9072d67e7e31c028c68fb664b95c94c283"
+tree = "23615f7a192cb460066dbad50d6e1a082c6161d5"
 
 [[package]]
 name = "Nettle"
