@@ -3,4 +3,4 @@ name = "Cut"
 version = "0.1.0"
 
 [dependencies]
-Lingua = { git = "https://github.com/meadow-lang/Lingua.git", rev = "07f3f985c0194ad7f04dfea21716fcd9046d0d3a" }
+Lingua = { git = "https://github.com/meadow-lang/Lingua.git", rev = "303acbd07ae3181d7467487342ad88953aa689cf" }
