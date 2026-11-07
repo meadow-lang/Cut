@@ -36,6 +36,9 @@ use Std.Char as C
       kinds : [String],
       params : [Param],
       conts : [Param],
+      rowKnown : Bool,
+      rowEffects : [String],
+      rowVars : [String],
       body : Stmt
     }
   Param + Param { name : String, rep : String }
@@ -54,7 +57,16 @@ use Std.Char as C
   Prod + Record { labels : [String], values : [Prod] }
   Prod + Mu { k : String, body : Stmt }
   Prod + Cocase { methods : [Method] }
-  Method + Method { name : String, params : [Param], conts : [Param], body : Stmt }
+  Method
+    + Method {
+      name : String,
+      params : [Param],
+      conts : [Param],
+      rowKnown : Bool,
+      rowEffects : [String],
+      rowVars : [String],
+      body : Stmt
+    }
   Cons + KVar { name : String }
   Cons + Halt {}
   Cons + MuT { name : String, rep : String, body : Stmt }
@@ -134,7 +146,7 @@ use Std.Char as C
 
 -- `def symbol (params; conts) = s`.
 @pub fun defDecl out (m : Meta) (symbol : String) params conts body =
-  newCutDeclDef out m symbol [] [] [] [] params conts body
+  newCutDeclDef out m symbol [] [] [] [] params conts False [] [] body
 
 -- `def symbol <'a = da, ...; e: Effect, ...> (params; conts) = s`: a
 -- definition generic in how values are represented and in effects. `reps`
@@ -160,7 +172,59 @@ use Std.Char as C
     (V.map snd effects)
     params
     conts
+    False
+    []
+    []
     body
+
+-- `defWith`, and what the definition may perform: its row, `! {E, .. | e,
+-- ..}` -- the effects, by their declarations' symbols, and some of its own
+-- effect variables (`docs/CUT.md`, "Rows"). A definition made without one
+-- says nothing, and the back end assumes the worst of it.
+@pub fun defWithRow
+    out
+    (m : Meta)
+    (symbol : String)
+    (reps : [(String, String)])
+    (effects : [(String, String)])
+    params
+    conts
+    (rowEffects : [String])
+    (rowVars : [String])
+    body =
+  newCutDeclDef
+    out
+    m
+    symbol
+    (V.map fst reps)
+    (V.map snd reps)
+    (V.map fst effects)
+    (V.map snd effects)
+    params
+    conts
+    True
+    rowEffects
+    rowVars
+    body
+
+-- A method of an object, `name(params; conts) => s`; and one with a row,
+-- as `defWithRow`'s, of the definition it is written in.
+@pub fun method out (m : Meta) (name : String) params conts body =
+  newCutMethod out m name params conts False [] [] body
+
+@pub fun methodWithRow
+    out
+    (m : Meta)
+    (name : String)
+    params
+    conts
+    (rowEffects : [String])
+    (rowVars : [String])
+    body =
+  newCutMethod out m name params conts True rowEffects rowVars body
+
+-- An object of `methods`.
+@pub fun cocase out (m : Meta) methods = newCutProdCocase out m methods
 
 -- `def symbol <'a = da, ...> (da: desc, ..., params; conts) = s`: a
 -- definition generic in how values are represented, a descriptor to each of
@@ -176,6 +240,9 @@ use Std.Char as C
     []
     (V.append (V.map (\r -> newCutParam out m "d${r}" "desc") reps) params)
     conts
+    False
+    []
+    []
     body
 
 -- `desc(rep)`: a representation's descriptor, a value.
@@ -215,7 +282,30 @@ use Std.Char as C
   newCutProdCocase
     out
     m
-    [newCutMethod out m "apply" [newCutParam out m x rep] [newCutParam out m k "ptr"] body]
+    [method out m "apply" [newCutParam out m x rep] [newCutParam out m k "ptr"] body]
+
+-- `function`, with a row for its `apply`: see `defWithRow`.
+@pub fun functionWithRow
+    out
+    (m : Meta)
+    (x : String)
+    (rep : String)
+    (k : String)
+    (rowEffects : [String])
+    (rowVars : [String])
+    body =
+  newCutProdCocase
+    out
+    m
+    [methodWithRow
+       out
+       m
+       "apply"
+       [newCutParam out m x rep]
+       [newCutParam out m k "ptr"]
+       rowEffects
+       rowVars
+       body]
 
 -- Consumers.
 @pub fun cont out (m : Meta) (name : String) = newCutConsKVar out m name
@@ -383,7 +473,8 @@ fun decl w (a : CutArena) (d : CutDecl) =
          else if V.isEmpty reps then "<${S.join ", " effects}> "
          else "<${S.join ", " reps}; ${S.join ", " effects}> "
        in
-       let u = put w "def ${r.symbol} ${reps}${params a r.params r.conts} =\n  " in
+       let said = row r.rowKnown r.rowEffects r.rowVars in
+       let u = put w "def ${r.symbol} ${reps}${params a r.params r.conts}${said} =\n  " in
        let v = stmt w a 1 r.body in
        put w "\n")
 
@@ -397,6 +488,14 @@ fun paramText (a : CutArena) (p : CutParam) : String = "${cutParamName a p}: ${c
 
 fun params (a : CutArena) (ps : [CutParam]) (ks : [CutParam]) : String =
   "(${S.join ", " (V.map (paramText a) ps)}; ${S.join ", " (V.map (paramText a) ks)})"
+
+-- ` ! {E, .. | e, ..}`, where a row was given: as `meadow_cut::print`
+-- writes one, `{| e}` when it names no effects.
+fun row (known : Bool) (effects : [String]) (vars : [String]) : String =
+  if not known then ""
+  else if V.isEmpty vars then " ! {${S.join ", " effects}}"
+  else if V.isEmpty effects then " ! {| ${S.join ", " vars}}"
+  else " ! {${S.join ", " effects} | ${S.join ", " vars}}"
 
 -- A new line, set in as far as `depth` says -- to a point: the text is for
 -- a reader that does not count its spaces, and a program nests far deeper
@@ -495,7 +594,7 @@ fun prod w (a : CutArena) (depth : Int) (p : CutProd) =
              (let x =
                 put
                   w
-                  "${line (depth + 1)}${cutMethodName a m}${params a (cutMethodParams a m) (cutMethodConts a m)} =>${line (depth + 2)}"
+                  "${line (depth + 1)}${cutMethodName a m}${params a (cutMethodParams a m) (cutMethodConts a m)}${row (cutMethodRowKnown a m) (cutMethodRowEffects a m) (cutMethodRowVars a m)} =>${line (depth + 2)}"
               in stmt w a (depth + 2) (cutMethodBody a m)))
            r.methods
        in put w "${line depth}}")
@@ -634,5 +733,82 @@ use Std.Test (assertEq)
           "effect test:Main/Choose { @many choose(unit) -> bool; flip(i64) -> unit }", "",
           "def test:Main/id <'a_5 = d_a_4; e_3: Effect, f_9: ManyEffect> (d_a_4: desc, x: 'a_5; k: ptr) =",
           "  <x | k>", "", "def test:Main/all <e: ManyEffect> (; k: ptr) =", "  <unit | k>", ""
+        ])
+       "the program's text"
+
+-- A row in each of its forms, on a definition and on a method, written as
+-- `meadow_cut::parse` reads it: effects and variables, variables alone, and
+-- nothing at all -- and no row, which says nothing.
+@test fun aRowIsWrittenAsMeadowCutReadsIt () =
+  let written =
+    runSt (\() ->
+      let out = builder () in
+      let m = nowhere in
+      let k = [param out m "k" "ptr"] in
+      let answer = give out m (int out m 1) (cont out m "k") in
+      let both =
+        defWithRow
+          out
+          m
+          "test:Main/both"
+          []
+          [("e1", "Effect"), ("e2", "ManyEffect")]
+          []
+          k
+          ["test:Main/Ask", "test:Main/Choose"]
+          ["e1", "e2"]
+          answer
+      in
+      let vars = defWithRow out m "test:Main/vars" [] [("e", "Effect")] [] k [] ["e"] answer in
+      let pure =
+        defWithRow
+          out
+          m
+          "test:Main/pure"
+          []
+          []
+          []
+          k
+          []
+          []
+          (give
+             out
+             m
+             (cocase out m [
+                methodWithRow
+                  out
+                  m
+                  "apply"
+                  [param out m "x" "i64"]
+                  [param out m "j" "ptr"]
+                  ["test:Main/Ask"]
+                  []
+                  (give out m (var out m "x") (cont out m "j")),
+                method
+                  out
+                  m
+                  "other"
+                  []
+                  [param out m "j" "ptr"]
+                  (give out m (int out m 2) (cont out m "j"))
+              ])
+             (cont out m "k"))
+      in
+      -- A row names only declared effects.
+      let ask = effectDecl out m "test:Main/Ask" [opDecl out m "ask" ["unit"] "i64"] in
+      let choose =
+        effectDecl out m "test:Main/Choose" [manyOpDecl out m "choose" ["unit"] "bool"]
+      in text (finished out (file out m "test:Main/pure" "none" [ask, choose, both, vars, pure])))
+  in assertEq
+       written
+       (S.join "\n" [
+          "cut 0", "entry test:Main/pure", "answer none", "",
+          "effect test:Main/Ask { ask(unit) -> i64 }", "",
+          "effect test:Main/Choose { @many choose(unit) -> bool }", "",
+          "def test:Main/both <e1: Effect, e2: ManyEffect> (; k: ptr) ! {test:Main/Ask, test:Main/Choose | e1, e2} =",
+          "  <1 | k>", "", "def test:Main/vars <e: Effect> (; k: ptr) ! {| e} =", "  <1 | k>", "",
+          "def test:Main/pure (; k: ptr) ! {} =", "  <cocase {",
+          "    apply(x: i64; j: ptr) ! {test:Main/Ask} =>", "      <x | j>;",
+          "    other(; j: ptr) =>", "      <2 | j>", "  } | k>", ""
         ])
        "the program's text"
