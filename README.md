@@ -36,3 +36,14 @@ Cut = { git = "https://github.com/meadow-lang/Cut.git", rev = "<commit>" }
 ```
 
 The builders take the program being written (`out`, from `builder` to `finished`) and where in the source each piece came from (`nowhere` where it came from nowhere). `text` writes a whole program; `textOf` writes some of its declarations, for a compiler that writes a unit at a time. The text format is versioned by its first line, `cut 0`, and may change with meadow until 1.0.
+
+## A program to debug
+
+A program built to be debugged says where its statements were written and what the source calls what they bind, which `meadow cut` takes off before it runs anything and a debugger reads (`docs/CUT.md` in meadow, "Positions and names"): `sourceDecl` declares a file by a symbol, `at` puts a statement at bytes of one, `shownParam` and `shownBinding` make a binder with its source name and type, and `titled` gives a `val` or a `def` its source name.
+
+```
+source app:Main/"src/Main.mw" = "/home/me/app/src/Main.mw"
+
+def app:Main/d1f @"double" (v3: i64 @"x" "Int"; k: ptr) =
+  @app:Main/"src/Main.mw":15-20 prim add(v3, v3; k)
+```

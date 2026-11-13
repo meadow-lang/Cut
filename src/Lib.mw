@@ -24,12 +24,14 @@ use Std.Char as C
   Decl + Data { symbol : String, params : [String], ctors : [DataCtor] }
   Decl + Roles { roles : [String], ctors : [String] }
   Decl + Native { ops : [String], runtime : [String] }
+  Decl + Source { symbol : String, path : String }
   Op + Op { name : String, params : [String], result : String, many : Bool }
   Decl + Effect { symbol : String, ops : [Op] }
-  Decl + Val { symbol : String, rep : String, body : Stmt }
+  Decl + Val { symbol : String, title : String, rep : String, body : Stmt }
   Decl
     + Def {
       symbol : String,
+      title : String,
       reps : [String],
       descs : [String],
       effects : [String],
@@ -41,7 +43,7 @@ use Std.Char as C
       rowVars : [String],
       body : Stmt
     }
-  Param + Param { name : String, rep : String }
+  Param + Param { name : String, rep : String, shown : String, ty : String }
   Prod + Var { name : String }
   Prod + Sym { symbol : String }
   Prod + Int { value : Int }
@@ -69,7 +71,7 @@ use Std.Char as C
     }
   Cons + KVar { name : String }
   Cons + Halt {}
-  Cons + MuT { name : String, rep : String, body : Stmt }
+  Cons + MuT { name : String, rep : String, shown : String, ty : String, body : Stmt }
   Cons + Call { method : String, args : [Prod], conts : [Cons] }
   CaseArm + CaseArm { pattern : String, fields : [Param], body : Stmt }
   Cons + Case { arms : [CaseArm] }
@@ -89,6 +91,7 @@ use Std.Char as C
       cont : Cons
     }
   Stmt + Error { message : String }
+  Stmt + At { source : String, start : Int, upto : Int, body : Stmt }
 }
 
 -- --- building ----------------------------------------------------------------
@@ -142,11 +145,11 @@ use Std.Char as C
 
 -- `val symbol : rep = s`: computed once, what `s` gives to `halt`.
 @pub fun valDecl out (m : Meta) (symbol : String) (rep : String) body =
-  newCutDeclVal out m symbol rep body
+  newCutDeclVal out m symbol "" rep body
 
 -- `def symbol (params; conts) = s`.
 @pub fun defDecl out (m : Meta) (symbol : String) params conts body =
-  newCutDeclDef out m symbol [] [] [] [] params conts False [] [] body
+  newCutDeclDef out m symbol "" [] [] [] [] params conts False [] [] body
 
 -- `def symbol <'a = da, ...; e: Effect, ...> (params; conts) = s`: a
 -- definition generic in how values are represented and in effects. `reps`
@@ -166,6 +169,7 @@ use Std.Char as C
     out
     m
     symbol
+    ""
     (V.map fst reps)
     (V.map snd reps)
     (V.map fst effects)
@@ -196,6 +200,7 @@ use Std.Char as C
     out
     m
     symbol
+    ""
     (V.map fst reps)
     (V.map snd reps)
     (V.map fst effects)
@@ -234,11 +239,12 @@ use Std.Char as C
     out
     m
     symbol
+    ""
     reps
     (V.map (\r -> "d${r}") reps)
     []
     []
-    (V.append (V.map (\r -> newCutParam out m "d${r}" "desc") reps) params)
+    (V.append (V.map (\r -> newCutParam out m "d${r}" "desc" "" "") reps) params)
     conts
     False
     []
@@ -248,7 +254,7 @@ use Std.Char as C
 -- `desc(rep)`: a representation's descriptor, a value.
 @pub fun desc out (m : Meta) (rep : String) = newCutProdDesc out m rep
 
-@pub fun param out (m : Meta) (name : String) (rep : String) = newCutParam out m name rep
+@pub fun param out (m : Meta) (name : String) (rep : String) = newCutParam out m name rep "" ""
 
 -- Producers.
 @pub fun var out (m : Meta) (name : String) = newCutProdVar out m name
@@ -279,10 +285,7 @@ use Std.Char as C
 -- A function: codata with one method, `apply`, of one argument named `x`,
 -- answering to the continuation named `k`.
 @pub fun function out (m : Meta) (x : String) (rep : String) (k : String) body =
-  newCutProdCocase
-    out
-    m
-    [method out m "apply" [newCutParam out m x rep] [newCutParam out m k "ptr"] body]
+  newCutProdCocase out m [method out m "apply" [param out m x rep] [param out m k "ptr"] body]
 
 -- `function`, with a row for its `apply`: see `defWithRow`.
 @pub fun functionWithRow
@@ -297,15 +300,7 @@ use Std.Char as C
   newCutProdCocase
     out
     m
-    [methodWithRow
-       out
-       m
-       "apply"
-       [newCutParam out m x rep]
-       [newCutParam out m k "ptr"]
-       rowEffects
-       rowVars
-       body]
+    [methodWithRow out m "apply" [param out m x rep] [param out m k "ptr"] rowEffects rowVars body]
 
 -- Consumers.
 @pub fun cont out (m : Meta) (name : String) = newCutConsKVar out m name
@@ -371,8 +366,8 @@ use Std.Char as C
 -- `unit`, which `name` is bound to, false first.
 @pub fun branch out (m : Meta) (name : String) cond no yes =
   newCutStmtPrim out m "if" [cond] [
-    newCutConsMuT out m name "unit" no,
-    newCutConsMuT out m name "unit" yes
+    newCutConsMuT out m name "unit" "" "" no,
+    newCutConsMuT out m name "unit" "" "" yes
   ]
 
 -- The function `f` given `arg`, its answer to `k`: a function is codata
@@ -382,7 +377,7 @@ use Std.Char as C
 
 -- A value named `name`, of representation `rep`, for `rest`.
 @pub fun binding out (m : Meta) (name : String) (rep : String) rest =
-  newCutConsMuT out m name rep rest
+  newCutConsMuT out m name rep "" "" rest
 
 -- `unit` given to the continuation `name`: how one arm of a match says it
 -- did not, to whatever tries the next.
@@ -396,7 +391,65 @@ use Std.Char as C
     out
     m
     (newCutProdMu out m name (first name))
-    (newCutConsMuT out m "u_${name}" "unit" next)
+    (newCutConsMuT out m "u_${name}" "unit" "" "" next)
+
+-- --- what a debugger is told --------------------------------------------------
+--
+-- A program built to be debugged says where each of its statements was
+-- written and what the source calls what it binds (`docs/CUT.md` in meadow,
+-- "Positions and names"). None of it does anything: `meadow cut` takes it
+-- off before it builds or runs a program, and a debugger reads it.
+
+-- `source symbol = "path"`: a file positions are in, by the symbol they name
+-- it by -- one of the front end's package, so that programs put together text
+-- by text name their files apart.
+@pub fun sourceDecl out (m : Meta) (symbol : String) (path : String) =
+  newCutDeclSource out m symbol path
+
+-- `@source:start-upto s`: `body`, written at bytes `start` to `upto` of the
+-- file `source` names. A debugger stops before it.
+@pub fun at out (m : Meta) (source : String) (start : Int) (upto : Int) body =
+  newCutStmtAt out m source start upto body
+
+-- A parameter, and a value bound for `rest`, that the source calls `shown`,
+-- of type `ty` as the front end writes types: `name: rep @"shown" "ty"`. A
+-- debugger shows the value by them.
+@pub fun shownParam out (m : Meta) (name : String) (rep : String) (shown : String) (ty : String) =
+  newCutParam out m name rep shown ty
+
+@pub fun shownBinding
+    out
+    (m : Meta)
+    (name : String)
+    (rep : String)
+    (shown : String)
+    (ty : String)
+    rest =
+  newCutConsMuT out m name rep shown ty rest
+
+-- `d`, a `val` or a `def`, said to be what the source calls `title`:
+-- `def symbol @"title" ...`, what a debugger's stack shows it as. Anything
+-- else is as it was.
+@pub fun titled out (title : String) (d : CutDecl) =
+  match viewCutDecl out d with
+  | CutDeclView.Val r -> newCutDeclVal out (metaCutDecl out d) r.symbol title r.rep r.body
+  | CutDeclView.Def r ->
+      newCutDeclDef
+        out
+        (metaCutDecl out d)
+        r.symbol
+        title
+        r.reps
+        r.descs
+        r.effects
+        r.kinds
+        r.params
+        r.conts
+        r.rowKnown
+        r.rowEffects
+        r.rowVars
+        r.body
+  | _ -> d
 
 -- --- the text ----------------------------------------------------------------
 
@@ -444,8 +497,9 @@ fun between w (sep : String) each xs =
 
 fun decl w (a : CutArena) (d : CutDecl) =
   match viewCutDecl a d with
+  | CutDeclView.Source r -> put w "source ${r.symbol} = ${quoted r.path}\n"
   | CutDeclView.Val r ->
-      (let u = put w "val ${r.symbol} : ${r.rep} =\n  " in
+      (let u = put w "val ${r.symbol}${titleText r.title} : ${r.rep} =\n  " in
        let v = stmt w a 1 r.body in
        put w "\n")
   | CutDeclView.Data r ->
@@ -474,7 +528,11 @@ fun decl w (a : CutArena) (d : CutDecl) =
          else "<${S.join ", " reps}; ${S.join ", " effects}> "
        in
        let said = row r.rowKnown r.rowEffects r.rowVars in
-       let u = put w "def ${r.symbol} ${reps}${params a r.params r.conts}${said} =\n  " in
+       let u =
+         put
+           w
+           "def ${r.symbol}${titleText r.title} ${reps}${params a r.params r.conts}${said} =\n  "
+       in
        let v = stmt w a 1 r.body in
        put w "\n")
 
@@ -484,7 +542,17 @@ fun table w (word : String) (keys : [String]) (values : [String]) =
   let v = V.foldl (\x kv -> put w "  ${fst kv} = ${snd kv}\n") () (V.zip keys values) in
   put w "}\n"
 
-fun paramText (a : CutArena) (p : CutParam) : String = "${cutParamName a p}: ${cutParamRep a p}"
+fun paramText (a : CutArena) (p : CutParam) : String =
+  "${cutParamName a p}: ${cutParamRep a p}${shownText (cutParamShown a p) (cutParamTy a p)}"
+
+-- ` @"shown" "ty"`, what the source calls a binder, where it was said.
+fun shownText (shown : String) (ty : String) : String =
+  if S.isEmpty shown then ""
+  else if S.isEmpty ty then " @${quoted shown}"
+  else " @${quoted shown} ${quoted ty}"
+
+-- ` @"title"`, what the source calls a declaration, where it was said.
+fun titleText (title : String) : String = if S.isEmpty title then "" else " @${quoted title}"
 
 fun params (a : CutArena) (ps : [CutParam]) (ks : [CutParam]) : String =
   "(${S.join ", " (V.map (paramText a) ps)}; ${S.join ", " (V.map (paramText a) ks)})"
@@ -547,6 +615,8 @@ fun stmt w (a : CutArena) (depth : Int) (s : CutStmt) =
       let t = put w "${line depth}; " in
       cons w a depth r.cont
   | CutStmtView.Error r -> put w "error ${quoted r.message}"
+  | CutStmtView.At r ->
+      (let u = put w "@${r.source}:${show r.start}-${show r.upto} " in stmt w a depth r.body)
 
 fun prod w (a : CutArena) (depth : Int) (p : CutProd) =
   match viewCutProd a p with
@@ -604,7 +674,8 @@ fun cons w (a : CutArena) (depth : Int) (c : CutCons) =
   | CutConsView.KVar r -> put w r.name
   | CutConsView.Halt _ -> put w "halt"
   | CutConsView.MuT r ->
-      (let u = put w "μ̃ ${r.name}: ${r.rep}.${line (depth + 1)}" in stmt w a (depth + 1) r.body)
+      (let u = put w "μ̃ ${r.name}: ${r.rep}${shownText r.shown r.ty}.${line (depth + 1)}" in
+       stmt w a (depth + 1) r.body)
   | CutConsView.Case r ->
       (let u = put w "case {" in
        let v =
@@ -810,5 +881,64 @@ use Std.Test (assertEq)
           "def test:Main/pure (; k: ptr) ! {} =", "  <cocase {",
           "    apply(x: i64; j: ptr) ! {test:Main/Ask} =>", "      <x | j>;",
           "    other(; j: ptr) =>", "      <2 | j>", "  } | k>", ""
+        ])
+       "the program's text"
+
+-- A program built to be debugged: the file its positions are in, a
+-- statement at a position, binders and a definition with what the source
+-- calls them -- as `meadow_cut::parse` reads them.
+@test fun positionsAndNamesAreWrittenAsMeadowCutReadsThem () =
+  let written =
+    runSt (\() ->
+      let out = builder () in
+      let m = nowhere in
+      let src = "test:Main/\"src/Main.mw\"" in
+      let source = sourceDecl out m src "/home/t/src/Main.mw" in
+      let body =
+        at
+          out
+          m
+          src
+          15
+          20
+          (give
+             out
+             m
+             (var out m "v3")
+             (shownBinding
+                out
+                m
+                "y"
+                "i64"
+                "twice"
+                "Int"
+                (give out m (var out m "y") (cont out m "k"))))
+      in
+      let double =
+        titled
+          out
+          "double"
+          (defDecl
+             out
+             m
+             "test:Main/d1f"
+             [shownParam out m "v3" "i64" "x" "Int"]
+             [param out m "k" "ptr"]
+             body)
+      in
+      let answer =
+        titled
+          out
+          "answer"
+          (valDecl out m "test:Main/d2" "i64" (give out m (int out m 1) (halt out m)))
+      in text (finished out (file out m "test:Main/d1f" "none" [source, double, answer])))
+  in assertEq
+       written
+       (S.join "\n" [
+          "cut 0", "entry test:Main/d1f", "answer none", "",
+          "source test:Main/\"src/Main.mw\" = \"/home/t/src/Main.mw\"", "",
+          "def test:Main/d1f @\"double\" (v3: i64 @\"x\" \"Int\"; k: ptr) =",
+          "  @test:Main/\"src/Main.mw\":15-20 <v3 | μ̃ y: i64 @\"twice\" \"Int\".", "    <y | k>>",
+          "", "val test:Main/d2 @\"answer\" : i64 =", "  <1 | halt>", ""
         ])
        "the program's text"
