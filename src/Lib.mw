@@ -62,6 +62,7 @@ use Std.Char as C
   Method
     + Method {
       name : String,
+      title : String,
       params : [Param],
       conts : [Param],
       rowKnown : Bool,
@@ -215,7 +216,7 @@ use Std.Char as C
 -- A method of an object, `name(params; conts) => s`; and one with a row,
 -- as `defWithRow`'s, of the definition it is written in.
 @pub fun method out (m : Meta) (name : String) params conts body =
-  newCutMethod out m name params conts False [] [] body
+  newCutMethod out m name "" params conts False [] [] body
 
 @pub fun methodWithRow
     out
@@ -226,7 +227,7 @@ use Std.Char as C
     (rowEffects : [String])
     (rowVars : [String])
     body =
-  newCutMethod out m name params conts True rowEffects rowVars body
+  newCutMethod out m name "" params conts True rowEffects rowVars body
 
 -- An object of `methods`.
 @pub fun cocase out (m : Meta) methods = newCutProdCocase out m methods
@@ -426,6 +427,12 @@ use Std.Char as C
     (ty : String)
     rest =
   newCutConsMuT out m name rep shown ty rest
+
+-- A method that is the function the source calls `title`, as
+-- `method` makes one: `apply @"mainLocal1"(params; conts) => s`, what a
+-- debugger's stack shows a frame of its body as.
+@pub fun titledMethod out (m : Meta) (name : String) (title : String) params conts body =
+  newCutMethod out m name title params conts False [] [] body
 
 -- `d`, a `val` or a `def`, said to be what the source calls `title`:
 -- `def symbol @"title" ...`, what a debugger's stack shows it as. Anything
@@ -664,7 +671,7 @@ fun prod w (a : CutArena) (depth : Int) (p : CutProd) =
              (let x =
                 put
                   w
-                  "${line (depth + 1)}${cutMethodName a m}${params a (cutMethodParams a m) (cutMethodConts a m)}${row (cutMethodRowKnown a m) (cutMethodRowEffects a m) (cutMethodRowVars a m)} =>${line (depth + 2)}"
+                  "${line (depth + 1)}${cutMethodName a m}${titleText (cutMethodTitle a m)}${params a (cutMethodParams a m) (cutMethodConts a m)}${row (cutMethodRowKnown a m) (cutMethodRowEffects a m) (cutMethodRowVars a m)} =>${line (depth + 2)}"
               in stmt w a (depth + 2) (cutMethodBody a m)))
            r.methods
        in put w "${line depth}}")
@@ -881,6 +888,37 @@ use Std.Test (assertEq)
           "def test:Main/pure (; k: ptr) ! {} =", "  <cocase {",
           "    apply(x: i64; j: ptr) ! {test:Main/Ask} =>", "      <x | j>;",
           "    other(; j: ptr) =>", "      <2 | j>", "  } | k>", ""
+        ])
+       "the program's text"
+
+-- A local function's method, with what the source calls the function.
+@test fun aTitledMethodIsWrittenAsMeadowCutReadsIt () =
+  let written =
+    runSt (\() ->
+      let out = builder () in
+      let m = nowhere in
+      let f =
+        cocase
+          out
+          m
+          [titledMethod
+             out
+             m
+             "apply"
+             "mainLocal1"
+             [param out m "x" "i64"]
+             [param out m "j" "ptr"]
+             (give out m (var out m "x") (cont out m "j"))]
+      in
+      let main =
+        defDecl out m "test:Main/main" [] [param out m "k" "ptr"] (give out m f (cont out m "k"))
+      in text (finished out (file out m "test:Main/main" "none" [main])))
+  in assertEq
+       written
+       (S.join "\n" [
+          "cut 0", "entry test:Main/main", "answer none", "", "def test:Main/main (; k: ptr) =",
+          "  <cocase {", "    apply @\"mainLocal1\"(x: i64; j: ptr) =>", "      <x | j>",
+          "  } | k>", ""
         ])
        "the program's text"
 
